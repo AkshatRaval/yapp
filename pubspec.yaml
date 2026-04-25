@@ -7,6 +7,7 @@ environment:
   sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
+  flutter_dotenv: ^5.1.0
   flutter:
     sdk: flutter
 
@@ -46,6 +47,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - .env
     - assets/images/
     - assets/animations/
     - assets/audio/
