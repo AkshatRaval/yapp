@@ -1,0 +1,12 @@
+{
+  "Records": [
+    {
+      "s3": {
+        "bucket": { "name": "yapp-media-production" },
+        "object": {
+          "key": "raw/images/39cab233-668f-4d23-b5c5-cefe76d5a3b8/1777193668075_2f48fb35-75d3-4a6b-8051-d802cce3867b.jpg"
+        }
+      }
+    }
+  ]
+}

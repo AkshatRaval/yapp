@@ -1,5 +1,17 @@
 [generate-upload-url]
-verify_jwt = false
+verify_jwt = true
 
 [get-playback-url]
-verify_jwt = false
+verify_jwt = true
+
+[process-audio]
+verify_jwt = true
+
+[create-yap]
+verify_jwt = true
+
+[delete-post]
+verify_jwt = true
+
+[delete-yap]
+verify_jwt = true

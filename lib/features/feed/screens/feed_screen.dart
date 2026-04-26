@@ -162,7 +162,7 @@ class _PostCard extends ConsumerWidget {
 
           // Image
           if (post.hasImage && post.media != null)
-            _SignedImage(fileKey: post.media!.rawFileKey, height: 200),
+            _SignedImage(fileKey: post.media!.playbackKey, height: 200),
 
           // Text
           if (post.textContent != null && post.textContent!.isNotEmpty)
@@ -312,7 +312,7 @@ class _YapChainSheet extends StatelessWidget {
                       const Gap(10),
                       if (post.hasImage && post.media != null)
                         _SignedImage(
-                            fileKey: post.media!.rawFileKey,
+                            fileKey: post.media!.playbackKey,
                             height: 220),
                       if (post.textContent != null &&
                           post.textContent!.isNotEmpty)
@@ -941,10 +941,10 @@ class _CategoryTag extends StatelessWidget {
 // ---------------------------------------------------------------------------
 // _OwnerMenu — three-dot menu shown only to the owner of a post or yap
 // ---------------------------------------------------------------------------
-class _OwnerMenu extends ConsumerWidget {
+class _OwnerMenu extends ConsumerStatefulWidget {
   final String ownerId;
   final String label; // 'post' or 'yap'
-  final VoidCallback onDelete;
+  final Future<bool> Function() onDelete;
 
   const _OwnerMenu({
     required this.ownerId,
@@ -953,27 +953,45 @@ class _OwnerMenu extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_OwnerMenu> createState() => _OwnerMenuState();
+}
+
+class _OwnerMenuState extends ConsumerState<_OwnerMenu> {
+  bool _isDeleting = false;
+
+  @override
+  Widget build(BuildContext context) {
     final currentUserId =
         Supabase.instance.client.auth.currentUser?.id;
-    if (currentUserId == null || currentUserId != ownerId) {
+    if (currentUserId == null || currentUserId != widget.ownerId) {
       return const SizedBox.shrink();
     }
 
     return PopupMenuButton<String>(
-      icon: const Icon(Icons.more_vert_rounded,
-          color: AppColors.textMuted, size: 18),
+      enabled: !_isDeleting,
+      icon: _isDeleting
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                color: AppColors.primary,
+                strokeWidth: 2,
+              ),
+            )
+          : const Icon(Icons.more_vert_rounded,
+              color: AppColors.textMuted, size: 18),
       color: AppColors.surfaceElevated,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       onSelected: (value) async {
         if (value != 'delete') return;
         final confirmed = await showDialog<bool>(
           context: context,
-          builder: (_) => AlertDialog(
+          barrierColor: AppColors.background.withValues(alpha: 0.35),
+          builder: (dialogContext) => AlertDialog(
             backgroundColor: AppColors.surface,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16)),
-            title: Text('Delete this $label?',
+            title: Text('Delete this ${widget.label}?',
                 style: AppTextStyles.headlineMedium),
             content: Text(
               "This can't be undone.",
@@ -981,18 +999,36 @@ class _OwnerMenu extends ConsumerWidget {
             ),
             actions: [
               TextButton(
-                onPressed: () => Navigator.of(context).pop(false),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
                 child: const Text('Cancel'),
               ),
               TextButton(
-                onPressed: () => Navigator.of(context).pop(true),
-                child: Text('Delete',
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Delete',
                     style: TextStyle(color: AppColors.error)),
               ),
             ],
           ),
         );
-        if (confirmed == true) onDelete();
+        if (confirmed != true || !context.mounted) return;
+
+        setState(() => _isDeleting = true);
+        final messenger = ScaffoldMessenger.of(context);
+        final deleted = await widget.onDelete();
+        if (!mounted) return;
+
+        setState(() => _isDeleting = false);
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              deleted
+                  ? '${_capitalize(widget.label)} deleted'
+                  : 'Could not delete ${widget.label}. Please try again.',
+            ),
+            backgroundColor:
+                deleted ? AppColors.surfaceElevated : AppColors.error,
+          ),
+        );
       },
       itemBuilder: (_) => [
         PopupMenuItem(
@@ -1002,7 +1038,7 @@ class _OwnerMenu extends ConsumerWidget {
               const Icon(Icons.delete_outline_rounded,
                   color: AppColors.error, size: 18),
               const Gap(10),
-              Text('Delete $label',
+              Text('Delete ${widget.label}',
                   style: AppTextStyles.bodyMedium
                       .copyWith(color: AppColors.error)),
             ],
@@ -1010,5 +1046,10 @@ class _OwnerMenu extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  String _capitalize(String value) {
+    if (value.isEmpty) return value;
+    return value[0].toUpperCase() + value.substring(1);
   }
 }

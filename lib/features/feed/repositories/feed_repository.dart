@@ -21,7 +21,7 @@ class FeedRepository {
           .select(
             'id, content_type, text_content, media_file_id, yap_count, '
             'created_at, user_id, '
-            'media_files(raw_file_key, media_type, duration_seconds)',
+            'media_files(id, raw_file_key, processed_file_key, media_type, duration_seconds)',
           )
           .eq('is_removed', false);
 
@@ -44,7 +44,7 @@ class FeedRepository {
           .from('yaps')
           .select(
             'id, user_id, post_id, parent_yap_id, created_at, '
-            'media_files(raw_file_key, processed_file_key, media_type, duration_seconds)',
+            'media_files(id, raw_file_key, processed_file_key, media_type, duration_seconds)',
           )
           .inFilter('post_id', postIds)
           .eq('is_deleted', false)

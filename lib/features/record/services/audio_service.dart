@@ -76,9 +76,11 @@ class AudioService {
       if (!await file.exists()) throw Exception('File not found');
 
       final fileSize = await file.length();
+      debugPrint('[AudioService] uploadAudio start fileSize=$fileSize');
       final session = supabase.auth.currentSession;
       if (session == null) throw Exception('No active session');
 
+      debugPrint('[AudioService] requesting upload URL');
       final response = await http.post(
         Uri.parse(AppConstants.generateUploadUrlEndpoint),
         headers: {
@@ -102,11 +104,12 @@ class AudioService {
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final uploadUrl = data['uploadUrl'] as String;
-      final playbackUrl = data['playbackUrl'] as String;
       final mediaFileId = data['mediaFileId'] as String;
       final fileKey = data['fileKey'] as String;
+      debugPrint('[AudioService] upload URL ok mediaFileId=$mediaFileId');
 
       final fileBytes = await file.readAsBytes();
+      debugPrint('[AudioService] uploading audio bytes to S3');
       final uploadResponse = await http.put(
         Uri.parse(uploadUrl),
         headers: {
@@ -119,18 +122,23 @@ class AudioService {
       if (uploadResponse.statusCode != 200) {
         throw Exception('S3 upload failed: ${uploadResponse.statusCode}');
       }
+      debugPrint('[AudioService] S3 upload ok mediaFileId=$mediaFileId');
 
-      await supabase.from('media_files').update({
-        'file_size_bytes': fileSize,
-        'raw_url': playbackUrl,
-        'processed_url': playbackUrl,
-        'processing_status': 'completed',
-      }).eq('id', mediaFileId);
+      try {
+        debugPrint('[AudioService] updating media file size');
+        await supabase
+            .from('media_files')
+            .update({'file_size_bytes': fileSize})
+            .eq('id', mediaFileId)
+            .timeout(const Duration(seconds: 5));
+        debugPrint('[AudioService] media file size update ok');
+      } catch (error) {
+        debugPrint('[AudioService] media file size update skipped: $error');
+      }
 
       return {
         'mediaFileId': mediaFileId,
         'fileKey': fileKey,
-        'playbackUrl': playbackUrl,
       };
     } catch (error) {
       _lastError = 'Upload failed: $error';

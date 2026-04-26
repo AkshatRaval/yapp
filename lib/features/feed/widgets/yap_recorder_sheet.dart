@@ -517,6 +517,7 @@ class _YapPreviewSheetState extends ConsumerState<YapPreviewSheet> {
     final path = widget.localPath;
     final durationSeconds = widget.durationSeconds;
 
+    // Insert optimistic pending yap into the feed
     final tempId = ref.read(feedProvider.notifier).addOptimisticYap(
           postId: postId,
           parentYapId: parentYapId,
@@ -524,38 +525,70 @@ class _YapPreviewSheetState extends ConsumerState<YapPreviewSheet> {
           durationSeconds: durationSeconds,
           localAudioPath: path,
         );
-
-    if (mounted) Navigator.of(context).pop();
+    debugPrint('[YapPreview] STEP 1 addOptimisticYap tempId=$tempId');
 
     final audioService = ref.read(audioServiceProvider);
+
+    // Upload to S3
     final uploadResult = await audioService.uploadAudio(path, durationSeconds);
     final mediaFileId = uploadResult?['mediaFileId'] as String?;
+    debugPrint('[YapPreview] STEP 2 upload mediaFileId=$mediaFileId');
 
     if (mediaFileId == null) {
-      debugPrint('[YapPreview] upload failed tempId=$tempId');
       ref.read(feedProvider.notifier).failYap(tempId, postId);
+      if (mounted) {
+        setState(() => _publishing = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Upload failed. Try again.'),
+          backgroundColor: AppColors.error,
+        ));
+      }
       return;
     }
 
-    debugPrint('[YapPreview] upload ok mediaFileId=$mediaFileId');
-
+    // Create the yap row in DB via edge function
+    debugPrint('[YapPreview] STEP 3 calling create-yap');
     final yapResult = await audioService.createYap(
       mediaFileId: mediaFileId,
       postId: postId,
       selectedFilter: selectedFilter,
       parentYapId: parentYapId,
     );
+    debugPrint('[YapPreview] STEP 4 create-yap result=${yapResult != null}');
 
     if (yapResult == null || yapResult['yap'] == null) {
-      debugPrint('[YapPreview] create-yap failed result=$yapResult');
       ref.read(feedProvider.notifier).failYap(tempId, postId);
+      if (mounted) {
+        setState(() => _publishing = false);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not publish yap. Try again.'),
+          backgroundColor: AppColors.error,
+        ));
+      }
       return;
     }
 
-    debugPrint('[YapPreview] create-yap ok confirming tempId=$tempId');
-    final serverYap =
-        FeedYap.fromServerMap(yapResult['yap'] as Map<String, dynamic>);
-    ref.read(feedProvider.notifier).confirmYap(tempId, serverYap);
+    // Confirm the optimistic yap with the real server data
+    final serverYap = FeedYap.fromServerMap(
+      yapResult['yap'] as Map<String, dynamic>,
+    );
+    final yapWithMediaId = serverYap.media == null
+        ? serverYap
+        : serverYap.copyWith(
+            media: serverYap.media!.copyWith(id: mediaFileId),
+          );
+    ref.read(feedProvider.notifier).confirmYap(tempId, yapWithMediaId);
+    debugPrint('[YapPreview] STEP 5 confirmYap done');
+
+    // Start watching for processed audio (background, fire-and-forget)
+    try {
+      ref.read(feedProvider.notifier).watchMediaProcessing(mediaFileId);
+    } catch (e) {
+      debugPrint('[YapPreview] watchMediaProcessing skipped: $e');
+    }
+
+    // Now safe to close the sheet
+    if (mounted) Navigator.of(context).pop();
   }
 
   Future<FeedProfile> _fetchProfile(String userId) async {

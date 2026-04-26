@@ -39,12 +39,14 @@ class FeedProfile {
 // FeedMedia
 // ---------------------------------------------------------------------------
 class FeedMedia {
+  final String? id;
   final String rawFileKey;
   final String? processedFileKey; // set once voice filter is processed
   final String mediaType;         // 'audio' | 'image' | 'video'
   final double? durationSeconds;
 
   const FeedMedia({
+    this.id,
     required this.rawFileKey,
     this.processedFileKey,
     required this.mediaType,
@@ -53,6 +55,7 @@ class FeedMedia {
 
   factory FeedMedia.fromMap(Map<String, dynamic> map) {
     return FeedMedia(
+      id: map['id'] as String?,
       rawFileKey: map['raw_file_key'] as String,
       processedFileKey: map['processed_file_key'] as String?,
       mediaType: map['media_type'] as String? ?? 'audio',
@@ -71,6 +74,22 @@ class FeedMedia {
   }
 
   int get totalSeconds => durationSeconds?.round() ?? 0;
+
+  FeedMedia copyWith({
+    String? id,
+    String? rawFileKey,
+    String? processedFileKey,
+    String? mediaType,
+    double? durationSeconds,
+  }) {
+    return FeedMedia(
+      id: id ?? this.id,
+      rawFileKey: rawFileKey ?? this.rawFileKey,
+      processedFileKey: processedFileKey ?? this.processedFileKey,
+      mediaType: mediaType ?? this.mediaType,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
