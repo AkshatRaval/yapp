@@ -1,0 +1,12 @@
+{
+  "name": "yapp-process-image",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.806.0",
+    "@aws-sdk/client-secrets-manager": "^3.806.0",
+    "sharp": "^0.33.5"
+  }
+}

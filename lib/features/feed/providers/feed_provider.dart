@@ -1,5 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/material.dart' show Color;
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -7,6 +8,7 @@ import '../../../core/constants/app_constants.dart';
 import '../models/feed_models.dart';
 import '../repositories/feed_repository.dart';
 import '../services/media_url_service.dart';
+import 'audio_player_provider.dart';
 
 // ---------------------------------------------------------------------------
 // Repository provider
@@ -51,18 +53,26 @@ class FeedState {
 // ---------------------------------------------------------------------------
 class FeedNotifier extends AsyncNotifier<FeedState> {
   static const int _pageSize = 20;
+  final Map<String, RealtimeChannel> _mediaChannels = {};
+  final Map<String, Timer> _mediaChannelTimers = {};
 
   FeedRepository get _repo => ref.read(feedRepositoryProvider);
   MediaUrlService get _mediaService => ref.read(mediaUrlServiceProvider);
 
   @override
   Future<FeedState> build() async {
+    ref.onDispose(_disposeMediaSubscriptions);
     final posts = await _repo.getFeed(limit: _pageSize);
     await _prefetchUrls(posts);
     return FeedState(posts: posts, hasMore: posts.length == _pageSize);
   }
 
   Future<void> refresh() async {
+    // Stop any currently playing yap — fresh feed = fresh slate
+    try {
+      await ref.read(audioPlayerProvider.notifier).stop();
+    } catch (_) {}
+
     state = const AsyncLoading();
     state = await AsyncValue.guard(() async {
       final posts = await _repo.getFeed(limit: _pageSize);
@@ -159,6 +169,68 @@ class FeedNotifier extends AsyncNotifier<FeedState> {
     state = AsyncData(current.copyWith(posts: updatedPosts));
   }
 
+  void attachMediaToOptimisticYap({
+    required String tempId,
+    required String mediaFileId,
+    required String rawFileKey,
+  }) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final updatedPosts = current.posts.map((post) {
+      final updatedYaps = _updateYapMedia(
+        post.yaps,
+        tempId,
+        (media) => media.copyWith(id: mediaFileId, rawFileKey: rawFileKey),
+      );
+      return post.copyWith(yaps: updatedYaps);
+    }).toList();
+
+    state = AsyncData(current.copyWith(posts: updatedPosts));
+  }
+
+  void watchMediaProcessing(String mediaFileId) {
+    if (_mediaChannels.containsKey(mediaFileId)) return;
+
+    try {
+      final channel = Supabase.instance.client.channel(
+        'media-processing-$mediaFileId',
+      );
+
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'media_files',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'id',
+          value: mediaFileId,
+        ),
+        callback: (payload) {
+          final row = payload.newRecord;
+          final processedFileKey = row['processed_file_key'] as String?;
+          final processingStatus = row['processing_status'] as String?;
+
+          if (processingStatus == 'completed' &&
+              processedFileKey != null &&
+              processedFileKey.isNotEmpty) {
+            _applyProcessedMediaKey(mediaFileId, processedFileKey);
+            _unsubscribeFromMedia(mediaFileId);
+          }
+        },
+      ).subscribe();
+
+      _mediaChannels[mediaFileId] = channel;
+      _mediaChannelTimers[mediaFileId] = Timer(
+        const Duration(seconds: 60),
+        () => _unsubscribeFromMedia(mediaFileId),
+      );
+    } catch (e) {
+      // Realtime is a playback optimization; publishing must continue without it.
+      debugPrint('[FeedNotifier] watchMediaProcessing failed: $e');
+    }
+  }
+
   /// Marks the optimistic yap as failed so the UI can show a retry.
   void failYap(String tempId, String postId) {
     final current = state.valueOrNull;
@@ -208,7 +280,23 @@ class FeedNotifier extends AsyncNotifier<FeedState> {
     FeedYap serverYap,
   ) {
     return yaps.map((yap) {
-      if (yap.id == tempId) return serverYap;
+      if (yap.id == tempId) {
+        final pendingMedia = yap.media;
+        final serverMedia = serverYap.media;
+        if (pendingMedia != null && serverMedia != null) {
+          return serverYap.copyWith(
+            media: serverMedia.copyWith(
+              id: serverMedia.id ?? pendingMedia.id,
+              rawFileKey: serverMedia.rawFileKey.isEmpty
+                  ? pendingMedia.rawFileKey
+                  : serverMedia.rawFileKey,
+              processedFileKey:
+                  serverMedia.processedFileKey ?? pendingMedia.processedFileKey,
+            ),
+          );
+        }
+        return serverYap;
+      }
       if (yap.replies.isNotEmpty) {
         return yap.copyWith(
           replies: _replaceYapInTree(yap.replies, tempId, serverYap),
@@ -226,6 +314,89 @@ class FeedNotifier extends AsyncNotifier<FeedState> {
       }
       return yap;
     }).toList();
+  }
+
+  List<FeedYap> _updateYapMedia(
+    List<FeedYap> yaps,
+    String yapId,
+    FeedMedia Function(FeedMedia media) update,
+  ) {
+    return yaps.map((yap) {
+      if (yap.id == yapId && yap.media != null) {
+        return yap.copyWith(media: update(yap.media!));
+      }
+      if (yap.replies.isNotEmpty) {
+        return yap.copyWith(
+          replies: _updateYapMedia(yap.replies, yapId, update),
+        );
+      }
+      return yap;
+    }).toList();
+  }
+
+  void _applyProcessedMediaKey(
+    String mediaFileId,
+    String processedFileKey,
+  ) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+
+    final updatedPosts = current.posts.map((post) {
+      return post.copyWith(
+        yaps: _updateMediaByMediaFileId(
+          post.yaps,
+          mediaFileId,
+          processedFileKey,
+        ),
+      );
+    }).toList();
+
+    state = AsyncData(current.copyWith(posts: updatedPosts));
+  }
+
+  List<FeedYap> _updateMediaByMediaFileId(
+    List<FeedYap> yaps,
+    String mediaFileId,
+    String processedFileKey,
+  ) {
+    return yaps.map((yap) {
+      final media = yap.media;
+      if (media?.id == mediaFileId) {
+        return yap.copyWith(
+          media: media!.copyWith(processedFileKey: processedFileKey),
+        );
+      }
+      if (yap.replies.isNotEmpty) {
+        return yap.copyWith(
+          replies: _updateMediaByMediaFileId(
+            yap.replies,
+            mediaFileId,
+            processedFileKey,
+          ),
+        );
+      }
+      return yap;
+    }).toList();
+  }
+
+  void _unsubscribeFromMedia(String mediaFileId) {
+    _mediaChannelTimers.remove(mediaFileId)?.cancel();
+    final channel = _mediaChannels.remove(mediaFileId);
+    if (channel != null) {
+      Supabase.instance.client.removeChannel(channel);
+    }
+  }
+
+  void _disposeMediaSubscriptions() {
+    for (final timer in _mediaChannelTimers.values) {
+      timer.cancel();
+    }
+    _mediaChannelTimers.clear();
+
+    for (final channel in _mediaChannels.values) {
+      Supabase.instance.client.removeChannel(channel);
+    }
+    _mediaChannels.clear();
   }
 
   // ---------------------------------------------------------------------------

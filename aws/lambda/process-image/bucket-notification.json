@@ -1,0 +1,30 @@
+{
+  "LambdaFunctionConfigurations": [
+    {
+      "Id": "raw-audio-to-yapp-process-audio",
+      "LambdaFunctionArn": "arn:aws:lambda:ap-south-1:292535187723:function:yapp-process-audio",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            { "Name": "Prefix", "Value": "raw/audio/" },
+            { "Name": "Suffix", "Value": ".ogg" }
+          ]
+        }
+      }
+    },
+    {
+      "Id": "raw-images-to-yapp-process-image",
+      "LambdaFunctionArn": "arn:aws:lambda:ap-south-1:292535187723:function:yapp-process-image",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            { "Name": "Prefix", "Value": "raw/images/" },
+            { "Name": "Suffix", "Value": ".jpg" }
+          ]
+        }
+      }
+    }
+  ]
+}

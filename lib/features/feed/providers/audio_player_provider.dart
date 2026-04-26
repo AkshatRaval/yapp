@@ -1,3 +1,4 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import '../services/media_url_service.dart';
@@ -47,17 +48,46 @@ class AudioPlaybackState {
 }
 
 // ---------------------------------------------------------------------------
+// _LifecycleObserver — pauses player when app backgrounds
+// ---------------------------------------------------------------------------
+class _LifecycleObserver extends WidgetsBindingObserver {
+  final VoidCallback onPause;
+  _LifecycleObserver(this.onPause);
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      onPause();
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // AudioPlayerNotifier — single global player, enforces one-at-a-time invariant
+// Pauses when app backgrounds.
 // ---------------------------------------------------------------------------
 class AudioPlayerNotifier extends Notifier<AudioPlaybackState> {
   late final AudioPlayer _player;
+  late final _LifecycleObserver _lifecycleObserver;
 
   @override
   AudioPlaybackState build() {
     _player = AudioPlayer();
 
-    // Position stream
-    ref.onDispose(() => _player.dispose());
+    // Pause whenever the app goes to background / phone is closed
+    _lifecycleObserver = _LifecycleObserver(() {
+      if (state.isPlaying) {
+        _player.pause();
+      }
+    });
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+
+    ref.onDispose(() {
+      WidgetsBinding.instance.removeObserver(_lifecycleObserver);
+      _player.dispose();
+    });
 
     _player.positionStream.listen((pos) {
       if (state.currentYapId != null) {
